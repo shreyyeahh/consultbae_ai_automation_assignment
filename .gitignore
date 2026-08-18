@@ -1,0 +1,19 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+.env
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Uploaded/recorded audio (keep the folder structure, not the actual files)
+task3_audio_app/**/uploads/*
+!task3_audio_app/**/uploads/.gitkeep
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# Local working notes for Claude Code, not part of the submission
+CLAUDE.md
