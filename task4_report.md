@@ -117,3 +117,8 @@ history / conversation). Format: **Issue → why it was a problem → what I did
     accounts or two different people can't be determined from source2 alone.
     Left as separate records unless a phone-based match from source1/source3 later
     ties one of them to a specific person.
+
+*Both #15 and #17 were confirmed by running `task1_merge/pipeline.py`: the 3 raw
+Arjun Mehta rows resolved to 3 separate `people` records, and the 2 Deepak Nair
+rows in source2 resolved to 2 separate records — nothing in the data connects
+them, so the pipeline correctly left them unmerged rather than guessing.*
