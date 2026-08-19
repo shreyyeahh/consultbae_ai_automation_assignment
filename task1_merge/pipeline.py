@@ -360,9 +360,16 @@ CREATE TABLE cbnexus_contacts (
 
 
 def build_database(candidates, groups):
-    if DB_PATH.exists():
-        DB_PATH.unlink()  # rebuilt fresh every run - no incremental/manual step
     conn = sqlite3.connect(DB_PATH)
+    # Drop only the 4 tables this pipeline owns, not the whole file. Task 3
+    # adds a `submissions` table to this same database - deleting the file
+    # here would silently wipe every audio submission on every Task 1 re-run.
+    conn.executescript("""
+        DROP TABLE IF EXISTS naukri_applications;
+        DROP TABLE IF EXISTS gig_worker_profiles;
+        DROP TABLE IF EXISTS cbnexus_contacts;
+        DROP TABLE IF EXISTS people;
+    """)
     conn.executescript(SCHEMA)
 
     for person_id, member_indices in enumerate(groups, start=1):
