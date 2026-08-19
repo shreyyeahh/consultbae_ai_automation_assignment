@@ -29,6 +29,10 @@ SOURCE1_PATH = DATA_DIR / "source1_naukri_applicants.csv"
 SOURCE2_PATH = DATA_DIR / "source2_gig_workers.csv"
 SOURCE3_PATH = DATA_DIR / "source3_cbnexus_contacts.csv"
 
+# Plain-CSV copies of the final tables, written alongside the DB so the
+# result can be reviewed without any SQLite tool at all.
+EXPORT_DIR = SCRIPT_DIR / "exported_csv"
+
 # City spelling aliases: old official name -> current official name. These
 # are normalized because they're literally the same city, not just a casing
 # difference - see task4_report.md issue #4.
@@ -401,7 +405,22 @@ def build_database(candidates, groups):
                 )
 
     conn.commit()
+    export_tables_to_csv(conn)
     conn.close()
+
+
+def export_tables_to_csv(conn):
+    """Dump every table to a plain CSV, so the final merged data can be
+    reviewed by opening a file in Excel/a text editor - no SQLite tool needed.
+    """
+    EXPORT_DIR.mkdir(exist_ok=True)
+    for table in ("people", "naukri_applications", "gig_worker_profiles", "cbnexus_contacts"):
+        cur = conn.execute(f"SELECT * FROM {table}")
+        columns = [description[0] for description in cur.description]
+        with open(EXPORT_DIR / f"{table}.csv", "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(columns)
+            writer.writerows(cur.fetchall())
 
 
 # ---------------------------------------------------------------------------
@@ -474,6 +493,7 @@ def print_summary(s1_count, s2_count, s2_dropped, s3_count, s3_dropped, candidat
         print(f"  - people found {labels[n]}: {by_source_count[n]}")
     print()
     print(f"Database written to: {DB_PATH}")
+    print(f"Plain-CSV copies of every table written to: {EXPORT_DIR}")
 
 
 # ---------------------------------------------------------------------------
