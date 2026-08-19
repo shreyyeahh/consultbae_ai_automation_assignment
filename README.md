@@ -271,6 +271,92 @@ CREATE TABLE cbnexus_contacts (
 );
 ```
 
+## Task 3 — Audio Submission App
+
+A Streamlit app where someone enters name + phone, records in-browser
+(`st.audio_input`) or uploads a file, and gets a `submissions` row added to the
+**same** `consultbae.db` from Task 1 — linked to an existing `people` row if
+their phone matches one, or a brand-new one if it doesn't.
+
+### Setup
+
+Unlike Task 1 (zero dependencies by design), Task 3 has real dependencies, so
+it gets its own virtual environment:
+
+```
+cd task3_audio_app
+python -m venv venv
+venv\Scripts\python.exe -m pip install -r requirements.txt
+venv\Scripts\streamlit.exe run app.py
+```
+
+(Calling `venv\Scripts\streamlit.exe` directly avoids PowerShell's script
+execution-policy prompt that `venv\Scripts\Activate.ps1` can trigger — if you'd
+rather activate normally, `venv\Scripts\Activate.ps1` then plain `streamlit run
+app.py` works too, once execution policy allows it.)
+
+Requires `ffmpeg` on PATH (used by `pydub` to decode WAV/MP3/WEBM-Opus/OGG
+uniformly, and by `ffprobe` — bundled with `ffmpeg` — to read real bitrate).
+Second view (submissions list) is at the "View Submissions" page in the
+sidebar once the app is running.
+
+### Schema — `submissions` table
+
+```sql
+CREATE TABLE IF NOT EXISTS submissions (
+    submission_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    person_id         INTEGER NOT NULL REFERENCES people(person_id),
+    audio_path        TEXT NOT NULL,
+    original_filename TEXT,
+    audio_format      TEXT,
+    duration_sec      REAL,
+    sample_rate_hz    INTEGER,
+    bitrate_kbps      REAL,
+    loudness_dbfs     REAL,
+    quality_label     TEXT,
+    submitted_at      TEXT NOT NULL
+);
+```
+
+`submission_id` is the PK — one person can submit many recordings, so this is
+one-to-many, same shape as `naukri_applications` allowing 2 rows for Nikhil
+Chopra. `person_id` is the FK into Task 1's `people` table — **not** phone;
+phone is only the lookup key used at insert time (via the exact same
+`normalize_phone()` from `pipeline.py`, imported directly rather than
+re-implemented, so the two tasks can never normalize the same real number
+differently).
+
+**Insert flow:** normalize the entered phone → `SELECT person_id FROM people
+WHERE canonical_phone = ?` → match found: reuse that `person_id`, `people` row
+untouched (including its real `source_count` from Task 1) → no match: insert a
+new `people` row with `source_count = 0`, a value Task 1's own pipeline can
+never produce (every person it creates came from ≥1 of the 3 CSVs), so `0`
+unambiguously flags "known only via the audio channel."
+
+### Design decisions
+
+- **Bitrate via `ffprobe`, not a formula.** `sample_rate × bit_depth ×
+  channels` only gives the right answer for uncompressed WAV — for MP3/WEBM
+  the real bitrate is whatever the codec was encoded at, which isn't
+  derivable from sample rate. Reading `ffprobe`'s actual container metadata
+  avoids reporting a wildly wrong number for compressed uploads (verified:
+  the same clip is ~706 kbps as WAV vs. ~69 kbps as a 64kbps-target MP3).
+- **Loudness clamped, not `-inf`.** A truly silent clip makes pydub's
+  `.dBFS` return `float('-inf')`, which is awkward to store/compare in
+  SQLite — clamped to a documented `-100.0` sentinel floor instead.
+- **Quality/noise estimate (bonus) is rule-based**: whole-clip average
+  loudness below -30 dBFS → `"silent"`; otherwise, crest factor (peak-to-
+  average loudness gap across 100ms windows) below 15.0 → `"noisy"` (a flat,
+  low-dynamic-range profile more typical of constant background noise than
+  speech); else `"good"`. Both thresholds were calibrated against 5 real
+  test recordings, not guessed — see stuck log #5. Known limitation stated
+  plainly in the code: this detects *silent* and *flat/noisy*, not
+  *unclear/mumbled* speech — that's a frequency-domain question a loudness
+  heuristic can't see.
+- **Extraction happens before any DB write.** A file that fails to decode
+  (`UnsupportedAudioError`) never reaches the database — no half-written
+  rows.
+
 ## Stuck log
 
 *(Filled in as I actually get stuck — not pre-written. 2-3 hardest places, what I
@@ -335,3 +421,44 @@ searched, what I asked AI, what I rejected and why.)*
    could theoretically replicate it in pure SQL, but that's the same
    connected-components idea written declaratively — more code to defend for no
    behavior difference, so kept the ~15-line Python `UnionFind` class instead.
+4. **Task 1's pipeline would have silently destroyed every Task 3 submission
+   on re-run.** While wiring up Task 3's `db.py` to share the exact same
+   `consultbae.db` file, I traced through what `pipeline.py`'s
+   `build_database()` actually does and noticed it called `DB_PATH.unlink()`
+   to force a clean rebuild every run — meaning re-running `python
+   pipeline.py` after Task 3 already had submissions in the database would
+   delete the entire file and rebuild it from scratch, taking every recorded
+   audio submission with it. Caught this by reasoning through what happens
+   when two tasks share one file, before it ever caused real data loss, not
+   from an error message. Fixed by having `build_database()` `DROP TABLE IF
+   EXISTS` only the 4 tables Task 1 itself owns (`people`,
+   `naukri_applications`, `gig_worker_profiles`, `cbnexus_contacts`) instead
+   of deleting the whole file — verified by inserting a test submission,
+   re-running `pipeline.py`, and confirming both the submission and the
+   original `person_id` assignments (e.g. `person_id=1` still resolving to
+   Tanvi Gupta) survived intact.
+5. **The quality/noise bonus label showed "good" for every single
+   submission, even a clip I deliberately recorded half-silent.** Tested the
+   app live with 5 real recordings, including one 10.7s clip I stayed
+   silent for roughly half of - it still came back `"good"`. Rather than
+   guess at new numbers, I had Claude pull the actual saved `.wav` files
+   from `uploads/` and print their real windowed loudness distributions.
+   That showed two compounding calibration mistakes: the silence check
+   required 90% of 100ms windows below -50 dBFS to fire, but even my
+   deliberately-silent clip only hit 52% (real "silence" through a laptop
+   mic still registers around -55 to -65 dBFS in short bursts, not solid
+   near-total silence) - so the ratio bar was unreachable in practice; and
+   separately, the "noisy" crest-factor threshold (6.0) was *lower* than
+   every one of the 5 real clips' actual values (16.5-34.1), because normal
+   speech has a lot of natural dynamic range between loud syllables and
+   quiet gaps - meaning nothing could ever have scored "noisy" either.
+   Fixed by switching the silence check to whole-clip average loudness
+   (`< -30 dBFS`, which cleanly separates the -35.4 dBFS silent clip from
+   the -23 to -28 dBFS normal ones) and raising the crest-factor threshold
+   to 15.0 (below all 5 real clean samples). Re-ran extraction on the same
+   5 saved files afterward to confirm the fix against real data rather than
+   just trusting the new numbers - the silent clip now correctly reads
+   `"silent"`, the other 4 stay `"good"`. Also had this confirmed
+   independently: a synthetic pure sine tone (constant amplitude, zero
+   natural dynamics) correctly scores `"noisy"` under the new threshold - a
+   clean example of exactly what crest factor is meant to catch.
