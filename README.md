@@ -305,4 +305,33 @@ searched, what I asked AI, what I rejected and why.)*
    people — so a compound key would only have cost real matches, not prevented
    any false ones; name is instead surfaced in the console output for a human to
    eyeball, not used to gate the merge itself.
-3. TBD
+3. **Why not skip the Python matching code entirely and just run a `FULL OUTER
+   JOIN` across the 3 tables on `(email, phone, name)`?** This looked like it
+   should work — SQLite supports `FULL OUTER JOIN`, and a composite key felt
+   like "more evidence" for a match. Two things killed it once I traced it
+   through on my own data:
+
+   ```
+   source1 row27: email=alt.nikhil.chopra70@...   phone=9000000103
+   source1 row37: email=nikhil.chopra70@...       phone=9000000103
+
+   A join chain like:
+     source1 FULL OUTER JOIN source2 ON email
+     source1 FULL OUTER JOIN source3 ON phone
+   never compares row27 to row37 - both rows are in source1 itself, and a join
+   across source1/source2/source3 has no step that self-compares source1
+   against source1. The Nikhil Chopra duplicate is invisible to this query
+   no matter how the ON clauses are written.
+   ```
+
+   First, requiring `name` in the key breaks the same way it did with
+   email+name (R. Verma vs Rohit Verma), and `phone`/`email` are `NULL` for 2 of
+   3 files each, so `t1.phone = t3.phone` never even evaluates true where one
+   side is missing the column. Second, and less obvious: joins are pairwise and
+   don't propagate — Tanvi Gupta only merges across all 3 files because source1
+   is a *bridge* (matches source2 on email, source3 on phone), and no fixed
+   join order can express "keep following matches transitively, however many
+   hops it takes" the way the union-find graph does. Concluded a recursive CTE
+   could theoretically replicate it in pure SQL, but that's the same
+   connected-components idea written declaratively — more code to defend for no
+   behavior difference, so kept the ~15-line Python `UnionFind` class instead.
