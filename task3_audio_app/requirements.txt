@@ -1,0 +1,5 @@
+streamlit==1.61.1
+pydub==0.25.1
+# Python 3.13 removed the stdlib `audioop` module pydub depends on for
+# format conversions; this is the official backport that restores it.
+audioop-lts==0.2.2
