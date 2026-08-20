@@ -410,6 +410,14 @@ uniformly, and by `ffprobe` — bundled with `ffmpeg` — to read real bitrate).
 Second view (submissions list) is at the "View Submissions" page in the
 sidebar once the app is running.
 
+**Deploying to Streamlit Community Cloud:** `ffmpeg` isn't installed on
+the base container by default, so the repo has a root-level
+[`packages.txt`](packages.txt) (just the line `ffmpeg`) telling Streamlit
+Cloud to `apt-get install` it during the build. This has to live at the
+**repository root**, not next to `app.py` — unlike `requirements.txt`,
+which Streamlit Cloud does find relative to the app file (see stuck log
+#11 for the real crash this caused before it was in the right place).
+
 ### Schema — `submissions` table
 
 ```sql
@@ -658,3 +666,18 @@ searched, what I asked AI, what I rejected and why.)*
     limitation named in `task5_stretch.md` - the same underlying fact
     (local disk writes don't automatically travel with a deploy) causing
     a real, reproducible crash instead of a theoretical one.
+11. **A fresh submission on the deployed app crashed with `FileNotFoundError`
+    inside `subprocess.run(["ffprobe", ...])`.** A different bug from #10 -
+    this one was `ffprobe` itself missing on the deployed container, not a
+    bad path. `ffmpeg`/`ffprobe` were never installed on Streamlit Cloud's
+    base image by default; the fix is a `packages.txt` file telling the
+    build to `apt-get install ffmpeg`, which had already been added - but
+    it was sitting at `task3_audio_app/packages.txt`, next to `app.py`.
+    Checked the file existed and had the right content before assuming the
+    bug was something else, which is what surfaced the actual issue:
+    Streamlit Cloud reads `requirements.txt` relative to the app's own
+    folder, but reads `packages.txt` only from the **repository root** -
+    two files that look like they'd follow the same rule, and don't. Moved
+    it to the repo root; `streamlit`/`pydub`/`audioop-lts` never had this
+    problem because `requirements.txt` was already correctly placed
+    relative to `app.py`.
