@@ -1,0 +1,240 @@
+{
+  "name": "Talent Insights â CSV Analyzer",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Talent Insights â Applicant CSV Analyzer",
+        "formDescription": "Upload an applicants CSV (name, phone, email, city, current CTC, skills). Your talent-analysis report appears on screen right after you submit.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Applicants CSV",
+              "fieldType": "file",
+              "multipleFiles": false,
+              "acceptFileTypes": ".csv",
+              "requiredField": true
+            }
+          ]
+        },
+        "responseMode": "lastNode",
+        "options": {
+          "buttonLabel": "Analyze",
+          "path": "talent-insights"
+        }
+      },
+      "id": "71ab0231-2386-4e6a-b9e4-90e0272cc9fa",
+      "name": "On CSV Upload",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        112
+      ],
+      "webhookId": "dbf5bec1-525d-4d1d-aefa-470b3148910d"
+    },
+    {
+      "parameters": {
+        "binaryPropertyName": "={{ Object.keys($binary)[0] }}",
+        "options": {
+          "headerRow": true
+        }
+      },
+      "id": "3c86341f-679e-4a42-af09-edcf69730f6a",
+      "name": "Parse CSV",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        224,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(i => i.json).filter(r => Object.keys(r).length > 0);\n\nconst num = (v) => {\n  if (v === null || v === undefined) return NaN;\n  const s = String(v).replace(/[^0-9.\\-]/g, '');\n  return s === '' ? NaN : parseFloat(s);\n};\n\n// CTC: some values are raw INR (e.g. 417964), some are lakhs (e.g. 4.2 => 420000)\nconst toInr = (v) => {\n  const n = num(v);\n  if (isNaN(n)) return null;\n  return n < 100 ? Math.round(n * 100000) : Math.round(n);\n};\n\nconst titleCase = (s) => String(s || '').trim().toLowerCase().replace(/\\b\\w/g, c => c.toUpperCase());\nconst normCity = (c) => {\n  const t = String(c || '').trim().toLowerCase();\n  if (!t) return 'Unknown';\n  if (t === 'gurgaon' || t === 'gurugram') return 'Gurugram';\n  if (t === 'new delhi' || t === 'delhi') return 'Delhi';\n  if (t === 'bengaluru' || t === 'bangalore') return 'Bengaluru';\n  return titleCase(t);\n};\n\nconst applicants = [];\nconst ctcs = [];\nconst exps = [];\nconst cityCount = {};\nconst skillCount = {};\nconst expBands = { '0-2 yrs': 0, '2-4 yrs': 0, '4-6 yrs': 0, '6+ yrs': 0 };\n\nfor (const r of rows) {\n  const name = r['Full Name'] || r.full_name || r.name || 'Unknown';\n  const city = normCity(r['City'] || r.city);\n  const exp = num(r['Experience (Years)'] || r.experience_years);\n  const ctc = toInr(r['Current CTC'] || r.current_ctc);\n  const skillsRaw = r['Skills'] || r.skills || '';\n  const skills = String(skillsRaw).split(',').map(s => s.trim()).filter(Boolean);\n\n  if (!isNaN(exp)) {\n    exps.push(exp);\n    if (exp < 2) expBands['0-2 yrs']++;\n    else if (exp < 4) expBands['2-4 yrs']++;\n    else if (exp < 6) expBands['4-6 yrs']++;\n    else expBands['6+ yrs']++;\n  }\n  if (ctc !== null) ctcs.push(ctc);\n  cityCount[city] = (cityCount[city] || 0) + 1;\n  for (const sk of skills) { const k = sk; skillCount[k] = (skillCount[k] || 0) + 1; }\n\n  applicants.push({ name, city, experience_years: isNaN(exp) ? null : exp, current_ctc_inr: ctc, skills });\n}\n\nconst avg = (arr) => arr.length ? Math.round(arr.reduce((a,b)=>a+b,0)/arr.length) : 0;\nconst median = (arr) => {\n  if (!arr.length) return 0;\n  const s = [...arr].sort((a,b)=>a-b);\n  const m = Math.floor(s.length/2);\n  return s.length % 2 ? s[m] : Math.round((s[m-1]+s[m])/2);\n};\n\nconst topSkills = Object.entries(skillCount).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([skill,count])=>({skill,count}));\nconst cityDist = Object.entries(cityCount).sort((a,b)=>b[1]-a[1]).map(([city,count])=>({city,count}));\n\nconst stats = {\n  total_applicants: rows.length,\n  avg_ctc_inr: avg(ctcs),\n  median_ctc_inr: median(ctcs),\n  min_ctc_inr: ctcs.length ? Math.min(...ctcs) : 0,\n  max_ctc_inr: ctcs.length ? Math.max(...ctcs) : 0,\n  avg_experience_years: exps.length ? Math.round((exps.reduce((a,b)=>a+b,0)/exps.length)*10)/10 : 0,\n  experience_bands: expBands,\n  top_skills: topSkills,\n  city_distribution: cityDist,\n};\n\n// compact list for the LLM (name + skills + experience only)\nconst forLlm = applicants.map(a => ({ name: a.name, experience_years: a.experience_years, skills: a.skills }));\n\nreturn [{ json: { stats, applicants, forLlm } }];"
+      },
+      "id": "56880f00-2b4e-4a87-a559-9882f22a6cfb",
+      "name": "Compute Stats",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a technical recruiter assistant. Return valid json only.\nFor each applicant, assign exactly ONE skill_category from this fixed list based on their skills:\nWeb Development, AI Automation, Python Developer, AI Engineer, .NET Developer, DevOps Engineer, Data Engineer, QA/Automation, Full Stack.\nThen compute category_distribution (count per category actually used) and write a short recruiter-facing insights narrative referencing these aggregate stats: {{ JSON.stringify($json.stats) }}.\nApplicants (json array): {{ JSON.stringify($json.forLlm) }}",
+        "hasOutputParser": true,
+        "batching": {}
+      },
+      "id": "d6051abb-fc70-40fb-bbf1-c44ee54a80d7",
+      "name": "Tag Skills & Insights",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        672,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-5-mini"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "id": "be1463bc-23c8-4a79-b8b1-f5bb11180e11",
+      "name": "OpenAI Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        688,
+        336
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "lpbKpEOSioghn3FO",
+          "name": "n8n free OpenAI API credits"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\"tagged\":[{\"name\":\"Jane Doe\",\"skill_category\":\"AI Automation\"}],\"category_distribution\":[{\"category\":\"AI Automation\",\"count\":3}],\"insights\":\"A concise 3-5 sentence recruiter-facing narrative summarizing the talent pool.\"}"
+      },
+      "id": "6f1c5e32-9c0e-43ae-95fe-7330e0a70565",
+      "name": "Insights Schema",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        816,
+        336
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const base = $('Compute Stats').first().json;\nconst stats = base.stats || {};\n\nconst llm = $input.first().json;\nconst parsed = llm && llm.output ? llm.output : llm;\nconst tagged = Array.isArray(parsed && parsed.tagged) ? parsed.tagged : [];\nlet dist = Array.isArray(parsed && parsed.category_distribution) ? parsed.category_distribution : [];\nconst insights = (parsed && parsed.insights) ? parsed.insights : '';\n\n// fallback: derive distribution from tagged if the model omitted it\nif (!dist.length && tagged.length) {\n  const c = {};\n  for (const t of tagged) { const k = t.skill_category || 'Uncategorized'; c[k] = (c[k]||0)+1; }\n  dist = Object.entries(c).map(([category,count])=>({category,count})).sort((a,b)=>b.count-a.count);\n}\n\nconst inr = (n) => 'Rs ' + Number(n||0).toLocaleString('en-IN');\nconst esc = (s) => String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');\n\n// QuickChart: render a Chart.js config as an <img> (no credential needed)\nconst palette = ['#6366f1','#8b5cf6','#ec4899','#f59e0b','#10b981','#06b6d4','#ef4444','#84cc16','#f97316','#14b8a6'];\nconst chartImg = (config, w, h) => {\n  const url = 'https://quickchart.io/chart?bkg=white&w=' + (w||480) + '&h=' + (h||300) + '&c=' + encodeURIComponent(JSON.stringify(config));\n  return '<img alt=\"chart\" style=\"max-width:100%;border-radius:10px;\" src=\"' + url + '\" />';\n};\n\nconst bands = stats.experience_bands || {};\nconst bandLabels = Object.keys(bands);\nconst bandVals = Object.values(bands);\nconst topSkills = stats.top_skills || [];\nconst cityDist = stats.city_distribution || [];\n\n// --- Chart configs ---\nconst catChart = chartImg({ type: 'doughnut', data: { labels: dist.map(d=>d.category), datasets: [{ data: dist.map(d=>d.count), backgroundColor: palette }] }, options: { plugins: { legend: { position: 'right', labels: { font: { size: 12 } } } } } });\nconst skillChart = chartImg({ type: 'horizontalBar', data: { labels: topSkills.map(s=>s.skill), datasets: [{ label: 'Applicants', data: topSkills.map(s=>s.count), backgroundColor: '#6366f1' }] }, options: { plugins: { legend: { display: false } }, scales: { xAxes: [{ ticks: { beginAtZero: true } }] } } }, 480, 340);\nconst bandChart = chartImg({ type: 'bar', data: { labels: bandLabels, datasets: [{ label: 'Applicants', data: bandVals, backgroundColor: '#10b981' }] }, options: { plugins: { legend: { display: false } }, scales: { yAxes: [{ ticks: { beginAtZero: true } }] } } });\nconst cityChart = chartImg({ type: 'pie', data: { labels: cityDist.map(c=>c.city), datasets: [{ data: cityDist.map(c=>c.count), backgroundColor: palette }] }, options: { plugins: { legend: { position: 'right', labels: { font: { size: 12 } } } } } });\n\n// --- Reusable HTML pieces ---\nconst statCard = (label, value) => '<div style=\"flex:1;min-width:150px;background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;padding:16px 18px;box-shadow:0 1px 3px rgba(0,0,0,0.05);\"><div style=\"font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:#64748b;\">' + esc(label) + '</div><div style=\"font-size:22px;font-weight:700;color:#0f172a;margin-top:6px;\">' + esc(value) + '</div></div>';\nconst card = (title, body) => '<div style=\"background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;padding:20px 22px;margin-top:20px;box-shadow:0 1px 3px rgba(0,0,0,0.05);\"><h3 style=\"margin:0 0 14px;color:#1e293b;font-size:17px;\">' + esc(title) + '</h3>' + body + '</div>';\nconst rowsHtml = (arr, cols) => arr.map(o => '<tr>' + cols.map(c => '<td style=\"padding:8px 12px;border-bottom:1px solid #f1f5f9;\">' + esc(o[c]) + '</td>').join('') + '</tr>').join('');\nconst th = (labels) => '<tr>' + labels.map(l => '<th style=\"padding:8px 12px;border-bottom:2px solid #e2e8f0;background:#f8fafc;text-align:left;color:#475569;font-size:13px;\">' + esc(l) + '</th>').join('') + '</tr>';\nconst table = (labels, arr, cols) => '<table style=\"border-collapse:collapse;width:100%;font-size:14px;\">' + th(labels) + rowsHtml(arr, cols) + '</table>';\n\nconst html = [\n'<div style=\"font-family:Segoe UI,Arial,Helvetica,sans-serif;max-width:820px;margin:0 auto;color:#0f172a;background:#f1f5f9;padding:28px 22px;\">',\n'<div style=\"background:linear-gradient(135deg,#6366f1,#8b5cf6);border-radius:16px;padding:26px 28px;color:#fff;\">',\n'<h1 style=\"margin:0;font-size:26px;\">Talent Insights Report</h1>',\n'<p style=\"margin:8px 0 0;opacity:.9;\">Automated analysis of your uploaded applicant CSV.</p>',\n'</div>',\n'<div style=\"display:flex;flex-wrap:wrap;gap:14px;margin-top:20px;\">'\n  + statCard('Total Applicants', stats.total_applicants)\n  + statCard('Average CTC', inr(stats.avg_ctc_inr))\n  + statCard('Median CTC', inr(stats.median_ctc_inr))\n  + statCard('Avg Experience', esc(stats.avg_experience_years) + ' yrs')\n+ '</div>',\ncard('AI Insights', '<p style=\"background:#eef2ff;padding:14px 16px;border-radius:10px;margin:0;line-height:1.6;color:#312e81;\">' + esc(insights) + '</p>'),\ncard('Skill Category Distribution', '<div style=\"text-align:center;\">' + catChart + '</div>' + '<div style=\"margin-top:14px;\">' + table(['Category','Count'], dist, ['category','count']) + '</div>'),\ncard('Top Skills', '<div style=\"text-align:center;\">' + skillChart + '</div>'),\ncard('Experience Bands', '<div style=\"text-align:center;\">' + bandChart + '</div>'),\ncard('City Distribution', '<div style=\"text-align:center;\">' + cityChart + '</div>' + '<div style=\"margin-top:14px;\">' + table(['City','Count'], cityDist, ['city','count']) + '</div>'),\ncard('CTC Range', '<p style=\"margin:0;font-size:15px;\">' + inr(stats.min_ctc_inr) + ' &mdash; ' + inr(stats.max_ctc_inr) + '</p>'),\ncard('Tagged Applicants', table(['Name','Skill Category'], tagged, ['name','skill_category'])),\n'<p style=\"color:#94a3b8;font-size:12px;margin-top:22px;text-align:center;\">Generated automatically by n8n.</p>',\n'</div>'\n].join('');\n\nreturn [{ json: { html } }];"
+      },
+      "id": "0e709ea5-8278-4a2d-ba4e-aa1af2fdbc25",
+      "name": "Build Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1024,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "respondWith": "showText",
+        "responseText": "={{ $json.html }}"
+      },
+      "id": "11013cf9-acf6-4314-96f1-d7a9335d3776",
+      "name": "Show Report",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        1248,
+        112
+      ],
+      "webhookId": "38e7c1e0-40f1-4d04-b6e8-3ee5e721f8fb"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "On CSV Upload": {
+      "main": [
+        [
+          {
+            "node": "Parse CSV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse CSV": {
+      "main": [
+        [
+          {
+            "node": "Compute Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute Stats": {
+      "main": [
+        [
+          {
+            "node": "Tag Skills & Insights",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tag Skills & Insights": {
+      "main": [
+        [
+          {
+            "node": "Build Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Tag Skills & Insights",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insights Schema": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Tag Skills & Insights",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Report": {
+      "main": [
+        [
+          {
+            "node": "Show Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "cb7e3234-01a0-475e-8cbe-3a223740a44e",
+  "meta": {
+    "instanceId": "c8435eaca55a125319e818b82db09c47a3c240ca7e0ca32711c6dcefd5cf1a5f"
+  },
+  "nodeGroups": [],
+  "id": "G6OvHupubXSXilB6",
+  "tags": []
+}

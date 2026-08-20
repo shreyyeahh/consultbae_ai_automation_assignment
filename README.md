@@ -271,6 +271,81 @@ CREATE TABLE cbnexus_contacts (
 );
 ```
 
+## Task 2 — n8n Automation
+
+**Own-idea pick** (the brief's third option: *"your own idea of similar
+scope — surprise us"*), not the duplicate-alert or skill-tagging templates
+verbatim — though it does include LLM-based skill tagging as one step.
+**Talent Insights — CSV Analyzer**: upload an applicants CSV to a public
+n8n form, get a full visual talent-analysis report back on the same page a
+few seconds later — no email, no credentials to configure beyond n8n's own
+free OpenAI connection.
+
+**Live form:** https://shreyasingh.app.n8n.cloud/form/talent-insights
+**Exported flow:** [`task2_automation/Talent Insights - CSV Analyzer.json`](task2_automation/Talent%20Insights%20-%20CSV%20Analyzer.json)
+
+### Flow
+
+```
+On CSV Upload (form trigger)
+  -> Parse CSV (Extract From File)
+  -> Compute Stats (Code node)
+  -> Tag Skills & Insights (LLM chain, gpt-5-mini + structured output parser)
+  -> Build Report (Code node - HTML + QuickChart chart images)
+  -> Show Report (form completion page)
+```
+
+### What it does
+
+- **Compute Stats** normalizes the same kind of messiness Task 1 deals
+  with: CTC in mixed units (raw INR vs. lakh-decimals like `4.2` →
+  ₹4,20,000), inconsistent city casing/aliases (`GURGAON`/`gurugram` →
+  `Gurugram`), skills split into per-skill counts — plus totals, avg/median/
+  min/max CTC, average experience, experience bands, top skills, and city
+  distribution.
+- **Tag Skills & Insights** sends the computed stats + a compact per-
+  applicant list to an LLM (n8n's free OpenAI credits), which assigns each
+  applicant to one of 9 fixed skill categories (Web Development, AI
+  Automation, Python Developer, etc.), computes the category distribution,
+  and writes a short recruiter-facing narrative — returned as validated
+  structured JSON via an output parser, not free-form text.
+- **Build Report** renders everything into a styled HTML report - KPI stat
+  cards, a doughnut chart (skill categories), bar charts (top skills,
+  experience bands), a pie chart (city distribution), and a tagged-
+  applicant table - using QuickChart (chart-as-a-URL, no extra credential)
+  so the whole flow stays zero-config beyond the one LLM connection.
+- **Show Report** displays that HTML directly on the form's own completion
+  page - the uploader never leaves the browser tab.
+
+### Design decisions
+
+- **No email/SMTP step, deliberately removed.** The first draft delivered
+  the report by email and required configuring SMTP credentials - rejected
+  as unnecessary complexity for what's fundamentally a synchronous
+  request/response (upload, wait a few seconds, see the result). Simplified
+  to `responseMode: lastNode` showing the report on the form's own result
+  page - zero credentials beyond the LLM connection, matching the same
+  "don't over-engineer" instinct used throughout this project.
+- **`gpt-5-mini`, not `gpt-4o-mini`.** The free OpenAI credits n8n provisions
+  don't include access to the 4o model family - swapped models to match
+  what the actual credential supports rather than leaving a broken
+  reference.
+- **Structured output parser for the LLM step**, not parsing free-form text
+  - the categorization and narrative come back as validated JSON matching a
+  fixed schema, so `Build Report` can index straight into
+  `parsed.tagged`/`parsed.category_distribution` without fragile text
+  parsing.
+- **CSV upload, not a live DB query against `consultbae.db`.** Worth being
+  upfront about: this flow analyzes *whatever CSV someone uploads*, it
+  doesn't read Task 1's merged `people` table directly. That's a reasonable
+  reading of "your own idea of similar scope," but if asked live, the
+  honest answer is that a version reading directly from
+  `task1_merge/consultbae.db` (via an n8n SQLite/HTTP node) would tie the
+  two tasks together more tightly - not built here to keep the flow at
+  zero-config (no DB connection string to manage in n8n).
+
+---
+
 ## Task 3 — Audio Submission App
 
 A Streamlit app where someone enters name + phone, records in-browser
@@ -465,3 +540,24 @@ searched, what I asked AI, what I rejected and why.)*
    independently: a synthetic pure sine tone (constant amplitude, zero
    natural dynamics) correctly scores `"noisy"` under the new threshold - a
    clean example of exactly what crest factor is meant to catch.
+6. **Rejected the first Task 2 draft for being over-engineered.** The
+   initial n8n flow delivered the talent report by email, which meant
+   configuring SMTP credentials and adding an email field to the intake
+   form. Pushed back immediately - didn't want to manage SMTP for something
+   that's really just "upload, wait a few seconds, see a result," and said
+   so plainly rather than accepting the more complex default. Rebuilt as a
+   straight line ending in the form's own completion page instead - no
+   SMTP node, no email credential, no email field - zero configuration
+   beyond n8n's existing OpenAI connection. Same "don't over-engineer"
+   instinct applied throughout Task 1 and Task 3, just caught at the
+   design-review stage instead of after building it.
+7. **A visuals complaint surfaced a separate, real bug.** Asked for the
+   report to have actual charts instead of "plain bland insights" - while
+   that was being rebuilt, the average-experience stat came back as
+   `"0.33 yrs"`, obviously wrong for applicant data that averages roughly
+   3.5-4 years. That turned out to be a genuine bug in the averaging
+   formula inside the Compute Stats code node, not a data issue - fixed and
+   shipped in the same pass as the chart rework. Same lesson as the Task 3
+   quality-label bug: a number that returns without erroring isn't the same
+   as a number that's correct, and it only gets caught by actually looking
+   at the output against data you already know the rough shape of.
