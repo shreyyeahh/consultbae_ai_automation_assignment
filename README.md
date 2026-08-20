@@ -335,6 +335,17 @@ On CSV Upload (form trigger)
   fixed schema, so `Build Report` can index straight into
   `parsed.tagged`/`parsed.category_distribution` without fragile text
   parsing.
+- **Identity resolution inside Compute Stats, same rule as Task 1.** A
+  single uploaded CSV can itself contain the same person twice under a
+  different name format (source1 alone has this: `"R. Verma"` /
+  `"Rohit Verma"` and two `Nikhil Chopra` rows, identical email/phone -
+  see `task4_report.md` #1-2) - counted as separate applicants, they'd
+  double-count that person's skills/CTC/city in every stat and chart. The
+  Compute Stats code node runs the exact same normalize-phone-or-email +
+  union-find approach as `pipeline.py`, ported to JavaScript, before
+  computing any stats - verified against the real `source1_naukri_applicants.csv`:
+  42 raw rows collapse to 40 unique applicants, matching Task 1's own
+  findings exactly.
 - **CSV upload, not a live DB query against `consultbae.db`.** Worth being
   upfront about: this flow analyzes *whatever CSV someone uploads*, it
   doesn't read Task 1's merged `people` table directly. That's a reasonable
@@ -561,3 +572,18 @@ searched, what I asked AI, what I rejected and why.)*
    quality-label bug: a number that returns without erroring isn't the same
    as a number that's correct, and it only gets caught by actually looking
    at the output against data you already know the rough shape of.
+8. **The CSV analyzer had no identity resolution at all - the exact Task 1
+   problem, reappearing inside one file.** Looked at the Compute Stats code
+   and realized it treats every CSV row as one applicant with no
+   deduplication step, so a person appearing twice under different name
+   formatting (which Task 1 already documented exists in
+   `source1_naukri_applicants.csv` - the R. Verma/Rohit Verma and Nikhil
+   Chopra pairs) would be double-counted in every stat: total applicants,
+   average CTC, top skills, city distribution, all inflated by the
+   duplicate. Fixed by porting the same normalize-phone-or-email +
+   union-find logic from `pipeline.py` into the Code node, in JavaScript
+   instead of Python since n8n Code nodes don't run Python here - verified
+   in Node directly against the real CSV before trusting it: 42 raw rows
+   collapse to 40, matching Task 1's own numbers exactly. Same underlying
+   lesson as Task 1's whole matching strategy, just needed a second time in
+   a completely different tool.
