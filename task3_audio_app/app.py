@@ -59,7 +59,12 @@ if submitted:
                 temp_path.unlink(missing_ok=True)
                 st.error(str(exc))
             else:
-                insert_submission(conn, person_id, temp_path, original_filename, metadata)
+                # Store just the filename, not an absolute path - an
+                # absolute path baked in on this machine (e.g. a Windows
+                # `D:\...` path) is meaningless once the DB is deployed
+                # elsewhere. The full path is reconstructed from
+                # UPLOAD_DIR wherever it's needed instead.
+                insert_submission(conn, person_id, temp_path.name, original_filename, metadata)
                 st.success(
                     f"Saved. Linked to {'a new' if is_new else 'an existing'} "
                     f"person (person_id={person_id})."

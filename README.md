@@ -346,14 +346,35 @@ On CSV Upload (form trigger)
   computing any stats - verified against the real `source1_naukri_applicants.csv`:
   42 raw rows collapse to 40 unique applicants, matching Task 1's own
   findings exactly.
-- **CSV upload, not a live DB query against `consultbae.db`.** Worth being
-  upfront about: this flow analyzes *whatever CSV someone uploads*, it
-  doesn't read Task 1's merged `people` table directly. That's a reasonable
-  reading of "your own idea of similar scope," but if asked live, the
-  honest answer is that a version reading directly from
-  `task1_merge/consultbae.db` (via an n8n SQLite/HTTP node) would tie the
-  two tasks together more tightly - not built here to keep the flow at
-  zero-config (no DB connection string to manage in n8n).
+- **CSV upload, not a live DB query against `consultbae.db` - and this
+  wasn't a preference, it was forced.** The first design attempted the
+  brief's actual second suggested option more literally: an LLM auto-tag
+  step that writes `skill_category` back into `naukri_applications` in the
+  real database. That's structurally impossible from this n8n instance -
+  `shreyasingh.app.n8n.cloud` executes workflows on n8n's own servers, not
+  this laptop, and `task1_merge/consultbae.db` is a file with no network
+  address a remote workflow can reach at all. This is the same SQLite
+  property that made it the right call for Task 1 and Task 3 - a plain
+  file, no server process listening for connections - working against it
+  here: there's nothing on the network end to connect to, not a missing
+  n8n feature. Considered self-hosting n8n locally (the only way to get
+  true read/write to the file) and writing to an n8n Data Table instead
+  (a second, disconnected data store that undoes Task 1's "one source of
+  truth"); redesigned around the constraint instead - a CSV-upload
+  analyzer needs no database connection at all, so the blocker doesn't
+  apply rather than being worked around.
+- **One batched LLM call over all applicants, not one call per applicant.**
+  Per-item calls would need each result zipped back to the right applicant
+  by array position - risky if the model ever reorders or drops one
+  silently. A single call with a structured schema keeps each applicant's
+  name attached directly inside the response instead of relying on
+  position.
+- **Stats computed deterministically in a Code node; the LLM is only used
+  for tagging and the narrative.** Averages, medians, and counts have one
+  unambiguous correct answer - delegating that arithmetic to an LLM adds
+  hallucination risk for zero benefit. The model is reserved for the one
+  part of this that's actually subjective: categorizing skills and writing
+  prose.
 
 ---
 
@@ -445,6 +466,12 @@ unambiguously flags "known only via the audio channel."
 - **Extraction happens before any DB write.** A file that fails to decode
   (`UnsupportedAudioError`) never reaches the database — no half-written
   rows.
+- **`submissions.audio_path` stores a filename, not an absolute path.**
+  An absolute path baked in at write time (e.g. a Windows `D:\...` path)
+  is meaningless once the same database file is deployed somewhere else -
+  this caused a real crash on Streamlit Cloud (stuck log #10). The full
+  path is reconstructed against `UPLOAD_DIR` fresh at read time instead,
+  wherever the app happens to be running.
 
 ## Stuck log
 
@@ -587,3 +614,47 @@ searched, what I asked AI, what I rejected and why.)*
    collapse to 40, matching Task 1's own numbers exactly. Same underlying
    lesson as Task 1's whole matching strategy, just needed a second time in
    a completely different tool.
+9. **Tried to build the brief's literal "writes results back" option first,
+   and hit a real architecture wall, not a config mistake.** Before landing
+   on the CSV analyzer, attempted an LLM auto-tag flow that writes
+   `skill_category` back into `naukri_applications` in the actual
+   `consultbae.db`. Got stuck because `shreyasingh.app.n8n.cloud` runs
+   workflows on n8n's own servers - not this laptop - and a local SQLite
+   file has no network address a cloud workflow can reach; there's also no
+   built-in SQLite node in n8n regardless. Worked through 3 realistic paths:
+   self-host n8n locally (`npx n8n`/Docker) pointed at the folder with the
+   `.db`, so the file and the workflow share a machine; write to an n8n
+   Data Table (a different, disconnected cloud database) instead; or a
+   one-off manual write, not a reusable flow. Rejected all 3 - the first
+   adds real infrastructure for a take-home, the second fragments the data
+   model Task 1 was built to unify, the third isn't automation at all - and
+   redesigned around the constraint instead: the CSV-upload analyzer needs
+   no database connection, so the blocker doesn't apply rather than being
+   worked around. Noticed only afterward that this is the exact same
+   property of SQLite (no server, just a file) that made it the correct
+   choice for Task 1 and Task 3, now cutting the other way.
+10. **The deployed audio app crashed on the submissions page with a
+    redacted `MediaFileStorageError`.** Real error from the live
+    Streamlit Cloud deployment, not something caught in testing. Traced it
+    by querying the actual committed `consultbae.db` directly: 5 real
+    submissions from local testing had been committed into the DB with
+    `audio_path` stored as absolute Windows paths
+    (`D:\consultbae_assignment\...`), baked in at write time via
+    `str(temp_path)`. Two compounding problems, not one - the path format
+    is meaningless on the deployed Linux container regardless, *and* the
+    actual `.wav` files those rows pointed to were never pushed to GitHub
+    at all (correctly gitignored, per the project's own storage rules) -
+    so even a correctly-formatted path would still fail, because the file
+    genuinely never existed anywhere but the local dev machine. Fixed by
+    storing only the filename in the database and reconstructing the full
+    path against `UPLOAD_DIR` fresh at read time (in `pages/1_View_
+    Submissions.py`), using `Path(audio_path).name` so it tolerates old
+    absolute-path rows too, not just new ones; also added a `.exists()`
+    check so a genuinely missing file shows one warning instead of
+    crashing the whole page. Cleaned the 5 stale rows and their 4
+    orphaned `people` records out of the committed seed DB, verified the
+    fix against a fresh submission before committing anything. This is
+    the concrete, not-hypothetical version of the ephemeral-storage
+    limitation named in `task5_stretch.md` - the same underlying fact
+    (local disk writes don't automatically travel with a deploy) causing
+    a real, reproducible crash instead of a theoretical one.
