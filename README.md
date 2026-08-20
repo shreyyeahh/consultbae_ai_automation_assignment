@@ -278,6 +278,9 @@ A Streamlit app where someone enters name + phone, records in-browser
 **same** `consultbae.db` from Task 1 — linked to an existing `people` row if
 their phone matches one, or a brand-new one if it doesn't.
 
+**Live demo:** https://audioappconsultbae.streamlit.app/ — this deployed
+instance's submissions won't survive a redeploy — see Task 5.
+
 ### Setup
 
 Unlike Task 1 (zero dependencies by design), Task 3 has real dependencies, so
